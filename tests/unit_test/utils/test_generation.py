@@ -1736,3 +1736,28 @@ def test_single_qpc_vlm_runner_bundle_matches_compiled_batch_size(tmp_path):
     assert input_dims["pixel_values"] == [2, 3]
     assert np.fromfile(io_dir / "data/input_ids.raw", dtype=np.int64).tolist() == [1, 2, 0, 0, 1, 2, 0, 0]
     assert np.fromfile(io_dir / "data/pixel_values.raw", dtype=np.float32).tolist() == [11.0, 12.0, 13.0] * 2
+
+
+@pytest.mark.cpu_only
+def test_concat_input_batches_preserves_qwen_mrope_layout():
+    from QEfficient.generation.generation_helpers import _concat_input_batches
+
+    input_batches = [
+        {
+            "input_ids": np.array([[10]], dtype=np.int64),
+            "position_ids": np.array([[[1]], [[2]], [[3]], [[4]]], dtype=np.int64),
+            "image_idx": np.array([[0]], dtype=np.int64),
+        },
+        {
+            "input_ids": np.array([[20]], dtype=np.int64),
+            "position_ids": np.array([[[5]], [[6]], [[7]], [[8]]], dtype=np.int64),
+            "image_idx": np.array([[0]], dtype=np.int64),
+        },
+    ]
+
+    merged_inputs = _concat_input_batches(input_batches)
+
+    assert merged_inputs["input_ids"].shape == (2, 1)
+    assert merged_inputs["position_ids"].shape == (4, 2, 1)
+    assert merged_inputs["image_idx"].shape == (1, 1)
+    np.testing.assert_array_equal(merged_inputs["position_ids"][:, :, 0], [[1, 5], [2, 6], [3, 7], [4, 8]])

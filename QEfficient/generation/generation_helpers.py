@@ -133,14 +133,29 @@ def _first_execution_batch(values: Sequence, batch_size: int, name: str) -> List
 
 
 def _concat_input_batches(input_batches: Sequence[Mapping[str, np.ndarray]]) -> Dict[str, np.ndarray]:
+    """Combine per-request processor outputs into one execution batch.
+
+    Qwen multimodal rotary position IDs have shape ``[4, batch, seq_len]``,
+    while other processor outputs are batch-major. Its image index is a shared
+    selector with shape ``[1, 1]`` rather than a per-request input.
+    """
     merged_inputs = {}
     input_names = set().union(*(input_batch.keys() for input_batch in input_batches))
+    position_ids = input_batches[0].get("position_ids")
+    uses_qwen_mrope = position_ids is not None and np.asarray(position_ids).ndim == 3 and position_ids.shape[0] == 4
+
     for input_name in input_names:
         values = [np.asarray(input_batch[input_name]) for input_batch in input_batches if input_name in input_batch]
         if len(values) != len(input_batches):
             raise ValueError(f"Processor output {input_name!r} is missing from one or more batch entries.")
+        if uses_qwen_mrope and input_name == "image_idx":
+            if not all(np.array_equal(value, values[0]) for value in values[1:]):
+                raise ValueError("Qwen MRoPE image_idx must be shared across an artifacts-mode execution batch.")
+            merged_inputs[input_name] = values[0]
+            continue
         try:
-            merged_inputs[input_name] = np.concatenate(values, axis=0)
+            batch_axis = 1 if uses_qwen_mrope and input_name == "position_ids" else 0
+            merged_inputs[input_name] = np.concatenate(values, axis=batch_axis)
         except ValueError as error:
             raise ValueError(f"Processor output {input_name!r} cannot be batched for artifacts mode replay.") from error
     return merged_inputs
